@@ -353,7 +353,8 @@ class TestPythonIndexer(unittest.TestCase):
 			'import itertools\n'
 			'itertools.cycle(None)\n'
 		)
-		self.assertTrue('CALL: virtual_file -> itertools.cycle at [2:11|2:15]' in client.references)
+		self.assertTrue('TYPE_USAGE: virtual_file -> itertools.cycle at [2:11|2:15]' in client.references)
+		self.assertTrue('CALL: virtual_file -> itertools.cycle.__init__ at [2:11|2:15]' in client.references)
 
 
 	def test_indexer_records_usage_of_super_keyword(self):

@@ -20,14 +20,15 @@ _virtualFilePath = 'virtual_file.py'
 
 class SourcetrailScript(jedi.Script):
 	def __init__(self, source=None, line=None, column=None, path=None,
-				encoding='utf-8', sys_path=None, environment=None,
-				_project=None):
-		jedi.Script.__init__(self, source, line, column, path, encoding, sys_path, environment, _project)
+				sys_path=None, environment=None, project_path=None):
 
-	def _goto(self, line, column, follow_imports=False, follow_builtin_imports=False,
+		project = jedi.api.project.Project(project_path, sys_path = sys_path)
+		jedi.Script.__init__( self, code=source, path=path, project=project)
+
+	def goto(self, line, column, follow_imports=False, follow_builtin_imports=False,
 				only_stubs=False, prefer_stubs=False, follow_override=False):
 		if follow_override:
-			return super()._goto(line, column, follow_imports=follow_imports, follow_builtin_imports=follow_builtin_imports, only_stubs=only_stubs, prefer_stubs=prefer_stubs)
+			return super().goto(line, column, follow_imports=follow_imports, follow_builtin_imports=follow_builtin_imports, only_stubs=only_stubs, prefer_stubs=prefer_stubs)
 		tree_name = self._module_node.get_name_of_position((line, column))
 		if tree_name is None:
 			# Without a name we really just want to jump to the result e.g.
@@ -51,12 +52,12 @@ class SourcetrailScript(jedi.Script):
 
 def isValidEnvironment(environmentPath):
 	try:
-		environment = jedi.create_environment(environmentPath, False)
+		environment = jedi.create_environment(environmentPath, safe=False)
 		environment._get_subprocess() # check if this environment is really functional
 	except Exception as e:
 		if os.name == 'nt' and os.path.isdir(environmentPath):
 			try:
-				environment = jedi.create_environment(os.path.join(environmentPath, "python.exe"), False)
+				environment = jedi.create_environment(os.path.join(environmentPath, "python.exe", safe=False))
 				environment._get_subprocess() # check if this environment is really functional
 				return ''
 			except Exception:
@@ -68,13 +69,13 @@ def isValidEnvironment(environmentPath):
 def getEnvironment(environmentPath = None):
 	if environmentPath is not None:
 		try:
-			environment = jedi.create_environment(environmentPath, False)
+			environment = jedi.create_environment(environmentPath, safe=False)
 			environment._get_subprocess() # check if this environment is really functional
 			return environment
 		except Exception as e:
 			if os.name == 'nt' and os.path.isdir(environmentPath):
 				try:
-					environment = jedi.create_environment(os.path.join(environmentPath, "python.exe"), False)
+					environment = jedi.create_environment(os.path.join(environmentPath, "python.exe"), safe=False)
 					environment._get_subprocess() # check if this environment is really functional
 					return environment
 				except Exception:
@@ -94,14 +95,6 @@ def getEnvironment(environmentPath = None):
 			return environment
 	except Exception:
 		pass
-
-	if os.name == 'nt': # this is just a workaround and shall be removed once Jedi is fixed (Pull request https://github.com/davidhalter/jedi/pull/1282)
-		for version in jedi.api.environment._SUPPORTED_PYTHONS:
-			for exe in jedi.api.environment._get_executables_from_windows_registry(version):
-				try:
-					return jedi.api.environment.Environment(exe)
-				except jedi.InvalidPythonEnvironment:
-					pass
 
 	raise jedi.InvalidPythonEnvironment("Unable to find an executable Python environment.")
 
@@ -207,6 +200,8 @@ class AstVisitor:
 
 		self.client = client
 		self.environment = evaluator.environment
+		self.project_path = evaluator.project.path
+		self.stubsPath = None
 
 		self.sourceFilePath = sourceFilePath
 		if sourceFilePath != _virtualFilePath:
@@ -354,7 +349,7 @@ class AstVisitor:
 				self.client.recordReferenceLocation(referenceId, getSourceRangeOfNode(overriddenNameNode))
 		except Exception:
 			pass
-			
+
 
 	def endVisitFuncdef(self, node):
 		if len(self.contextStack) > 0:
@@ -756,6 +751,29 @@ class AstVisitor:
 		return contextName + '<' + definitionNameNode.value + '>'
 
 
+	def getStubsPath(self):
+		if self.stubsPath is None:
+			stubsPath = []
+
+			jediPath = os.path.dirname(jedi.__file__)
+			stdlibPath = jediPath + '/third_party/typeshed/stdlib'
+			stdlibPath = os.path.abspath(stdlibPath)
+
+			major = self.environment.version_info.major
+			minor = self.environment.version_info.minor
+			if major == 2:
+				stubsPath.append(stdlibPath + '/2')
+			if major == 2 or major == 3:
+				stubsPath.append(stdlibPath + '/2and3')
+			if major == 3:
+				stubsPath.append(stdlibPath + '/3')
+				for m in range(1, minor+1):
+					p = stdlibPath + '/3.' + str(m)
+					if os.path.isdir(p):
+						stubsPath.append(p)
+			self.stubsPath = stubsPath
+		return list(self.stubsPath)
+
 	def getNameHierarchyFromModuleFilePath(self, filePath):
 		if filePath is None:
 			return None
@@ -766,24 +784,7 @@ class AstVisitor:
 		filePath = os.path.abspath(filePath)
 		filePath = os.path.splitext(filePath)[0]
 
-		sysPath = []
-
-		jediPath = os.path.dirname(jedi.__file__)
-		major = self.environment.version_info.major
-		minor = self.environment.version_info.minor
-		if major == 2:
-			sysPath.append(os.path.abspath(jediPath + '/third_party/typeshed/stdlib/2'))
-		if major == 2 or major == 3:
-			sysPath.append(os.path.abspath(jediPath + '/third_party/typeshed/stdlib/2and3'))
-		if major == 3:
-			sysPath.append(os.path.abspath(jediPath + '/third_party/typeshed/stdlib/3'))
-			if minor == 5:
-				sysPath.append(os.path.abspath(jediPath + '/third_party/typeshed/stdlib/3.5'))
-			if minor == 6:
-				sysPath.append(os.path.abspath(jediPath + '/third_party/typeshed/stdlib/3.6'))
-			if minor == 7:
-				sysPath.append(os.path.abspath(jediPath + '/third_party/typeshed/stdlib/3.7'))
-
+		sysPath = self.getStubsPath()
 		sysPath.extend(self.sysPath)
 
 		for p in sysPath:
@@ -951,14 +952,16 @@ class AstVisitor:
 			return SourcetrailScript(
 				source = self.sourceFileContent,
 				environment = self.environment,
-				sys_path = self.sysPath
+				sys_path = self.sysPath,
+				project_path = self.project_path
 			)
 		else: # we are indexing a real file
 			return SourcetrailScript(
 				source = None,
 				path = sourceFilePath,
 				environment = self.environment,
-				sys_path = self.sysPath
+				sys_path = self.sysPath,
+				project_path = self.project_path
 			)
 
 
